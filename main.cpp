@@ -41,7 +41,7 @@ void spi_init()
 	// gives clock high time and clock low time as 25ns each. Hence total
 	// cycle time is 50ns. Hence max frequency is 1/( 50 x 10^-9 ).
 	// DIV2 is the fastest we can go.
-	SPI.setClockDivider(SPI_CLOCK_DIV2);
+	SPI.setClockDivider(SPI_CLOCK_DIV4);
 
 	// CPOL=0 (base value of clock is zero)
 	// CPHA=0 (data bits shifted into RFM12 upon rising edge of clock)
@@ -61,6 +61,67 @@ static uint16_t rfm_transfer(const uint16_t cmd)
 	reply |= SPI.transfer(cmd & 0x00FF); // transfer LSB
 	spi_select(false);
 	return reply;
+}
+
+void reset_FIFO_RFM12b()
+{
+
+	// To restart synchron pattern recognition, bit ff should be cleared and set
+	// i.e. packet will start with preable, then synchron pattern, then 16 bytes
+	// of data, then turn FIFO off and on (I think)
+
+	// 8. FIFO and Reset Mode Command
+	// 1 1 0 0 1 0 1 0 f3 f2 f1 f0 sp al ff dr
+	//
+	// f: FIFO interrupt level = 8 (RFM01 & default)
+	// sp: length of synchron pattern (not on RFM01!!!) <-- DEAL BREAKER FOR USING RFM12 with RFM01?!
+	// al: FIFO fill start condition. Not on RFM01. Default = sync-word but RFM01 doesn't output sync word?
+	//     0=synchron pattern
+	//     1=always fill
+	// ff: enable FIFO fill
+	// dr: disable hi sensitivity reset mode
+	//
+	//                         safd
+	//             11001010ffffplfr
+	rfm_transfer(0b1100101010001000);
+
+	// 8. FIFO and Reset Mode Command
+	// 1 1 0 0 1 0 1 0 f3 f2 f1 f0 sp al ff dr
+	//
+	// f: FIFO interrupt level = 8 (RFM01 & default)
+	// sp: length of synchron pattern (not on RFM01!!!) <-- DEAL BREAKER FOR USING RFM12 with RFM01?!
+	// al: FIFO fill start condition. Not on RFM01. Default = sync-word but RFM01 doesn't output sync word?
+	//     0=synchron pattern
+	//     1=always fill
+	// ff: enable FIFO fill
+	// dr: disable hi sensitivity reset mode
+	//
+	//                         safd
+	//             11001010ffffplfr
+	rfm_transfer(0b1100101010001010);
+}
+
+void reset_FIFO_RFM01()
+{
+    // From RFM01 command #12 CE89 (11. output and FIFO mode) (gangliontwitch has CE88)
+    // f3 f2 f1 f0 s1 s0 ff fe
+    //  1  0  0  0  1  0  0  0
+    // f: FIFO interrupt level = 8
+    // s: FIFO fill start condition = reserved
+    // ff=0: disable FIFO fill
+    // fe=0: disable FIFO function
+    rfm_transfer(0xCE88);
+	//rfm_transfer(0xCE48);
+
+    // From RFM01 command #14 CE8B (11. output and FIFO mode)
+    // f3 f2 f1 f0 s1 s0 ff fe
+    //  1  0  0  0  1  0  1  1
+    // f: FIFO interrupt level = 8
+    // s: FIFO fill start condition = reserved
+    // ff=1: enable FIFO fill
+    // fe=1: enable FIFO function
+   rfm_transfer(0xCE8B);
+
 }
 
 volatile byte bytes_read = 0;
@@ -84,50 +145,33 @@ void rfm12_interrupt()
 		bytes_read = 0;
 		Serial.print("\r\n");
 
-		// To restart synchron pattern recognition, bit ff should be cleared and set
-		// i.e. packet will start with preable, then synchron pattern, then 16 bytes
-		// of data, then turn FIFO off and on (I think)
-
-		// 8. FIFO and Reset Mode Command
-		// 1 1 0 0 1 0 1 0 f3 f2 f1 f0 sp al ff dr
-		//
-		// f: FIFO interrupt level = 8 (RFM01 & default)
-		// sp: length of synchron pattern (not on RFM01!!!) <-- DEAL BREAKER FOR USING RFM12 with RFM01?!
-		// al: FIFO fill start condition. Not on RFM01. Default = sync-word but RFM01 doesn't output sync word?
-		//     0=synchron pattern
-		//     1=always fill
-		// ff: enable FIFO fill
-		// dr: disable hi sensitivity reset mode
-		//
-		//                         safd
-		//             11001010ffffplfr
-		rfm_transfer(0b1100101010001000);
-
-		// 8. FIFO and Reset Mode Command
-		// 1 1 0 0 1 0 1 0 f3 f2 f1 f0 sp al ff dr
-		//
-		// f: FIFO interrupt level = 8 (RFM01 & default)
-		// sp: length of synchron pattern (not on RFM01!!!) <-- DEAL BREAKER FOR USING RFM12 with RFM01?!
-		// al: FIFO fill start condition. Not on RFM01. Default = sync-word but RFM01 doesn't output sync word?
-		//     0=synchron pattern
-		//     1=always fill
-		// ff: enable FIFO fill
-		// dr: disable hi sensitivity reset mode
-		//
-		//                         safd
-		//             11001010ffffplfr
-		rfm_transfer(0b1100101010001010);
+		reset_FIFO_RFM12b();
 	}
 }
+
+void rfm01_interrupt()
+{
+	while(digitalRead(RFM_IRQ)==0) {
+		uint16_t data = rfm_transfer(0x0000); // data
+		bytes_read++;
+
+		Serial.print(bytes_read);
+
+		if (bytes_read >= 16) {
+			bytes_read = 0;
+			Serial.print("\r\n");
+		}
+	}
+	reset_FIFO_RFM01();
+}
+
 
 void rf12_init_cc () {
     Serial.println("Starting rf12_initialize_cc() ");
 
     spi_init();
 
-	spi_select(true);
 	rfm_transfer(0x0000);
-	spi_select(false);
 
     delay(2000); // give RFM time to start up
 
@@ -224,7 +268,6 @@ void rf12_init_cc () {
      * BEGIN RFM12b COMMANDS...
      ***************************/
 
-    spi_select(true);
 	rfm_transfer(0x0000);
 
     // 2. configuration setting command
@@ -355,7 +398,6 @@ void rf12_init_cc () {
 
     // 17. low battery detector and micro controller clock div
     rfm_transfer(0xC000); // 1.0MHz,2.2V
-    spi_select(false);
 
     Serial.println("attaching interrupt");
     attachInterrupt(0, rfm12_interrupt, LOW);
@@ -364,13 +406,137 @@ void rf12_init_cc () {
     return;
 }
 
+void rf01_init_cc () {
+    Serial.println("Starting rf01_initialize_cc() ");
+
+    spi_init();
+
+	spi_select(true);
+	rfm_transfer(0x0000);
+	spi_select(false);
+
+    delay(2000); // give RFM time to start up
+
+    Serial.println("RFM01 finished power-up reset.  Starting init...");
+
+     // From RFM01 command #1 0x892D
+     // eb=0 (disable low batt detection)
+     // et=0 (disable wake-up timer)
+     // ex=1 (enable crystal oscillator)
+     // baseband bandwidth = 67kHz
+     // dc=1 (disable signal output of CLK pin)
+    rfm_transfer(0x892D);
+
+     // RFM01 command #2 E196 (5. wake-up timer command)
+    rfm_transfer(0xE196);
+
+     // RFM01 command #3 CC0E (6. low duty-cycle command)
+     // en = 0: disable low duty cycle mode
+    rfm_transfer(0xCC0E);
+
+     // From RFM01 command #4 C69F (8. AFC Command)
+     // a1 a0 rl1 rl0 st fi oe en
+     //  1  0   0   1  1  1  1  1
+     // a  = AFC auto-mode: keep offset when VDI hi
+     // rl = range limit: +15/-16 (433band: 2.5kHz)
+     // st=1 st goes hi will store offset into output register
+     // fi=1 Enable AFC hi accuracy mode
+     // oe=1 Enable AFC output register
+     // en=1 Enable AFC function
+    rfm_transfer(0xC69F);
+
+     // From RFM01 command #5 C46A (9. data filter command)
+     // al ml 1 s1 s0 f2 f1 f0
+     //  0  1 1  0  1  0  1  0
+     // al=0: disable clock recovery auto-lock
+     // ml=1: enable clock recovery fast mode
+     // s: data filter=digital filter
+     // f: DQD threshold = 2
+    rfm_transfer(0xC46A);
+
+     // From RFM command #6 C88A
+     // 3918.5 bps
+    rfm_transfer(0xC88A);
+
+     // From RFM01 command #7 C080 (4. receiver setting command)
+     // d1 d0 g1 g0 r2 r1 r0 en
+     //  1  0  0  0  0  0  0  0
+     // d: VDI source = clock recovery lock output
+     // g: LNA gain = 0 dBm
+     // r: DRSSI threshold = -103 dBm
+     // en=0: disable receiver
+     rfm_transfer(0xC080);
+
+     // GanglionTwitch has command CE88 here, my CC doesn't (11. output and FIFO mode)
+
+     // From RFM01 command #8 CE8B (11. output and FIFO mode)
+     // f3 f2 f1 f0 s1 s0 ff fe
+     //  1  0  0  0  1  0  1  1
+     // f: FIFO interrupt level = 8
+     // s: FIFO fill start condition = reserved
+     // ff=1: enable FIFO fill
+     // fe=1: enable FIFO function
+    rfm_transfer(0xCE8B);
+
+     // From RFM01 command #9 C081 (4. receiver setting command)
+     // d1 d0 g1 g0 r2 r1 r0 en
+     //  1  0  0  0  0  0  0  1
+     // d: VDI source = clock recovery lock output
+     // g: LNA gain = 0 dBm
+     // r: DRSSI threshold = -103 dBm
+     // en=1: enable receiver <--- only diff from command #7
+    rfm_transfer(0xC081);
+
+     // From RFM01 command #10 C200 (7. Low Batt Detector & MCU Clock Div)
+     // d2 d1 d0 t4 t3 t2 t1 t0
+     //  0  0  0  0  0  0  0  0
+     // d: frequency of CLK pin = 1MHz
+     // t: low batt detection theshold = 2.2+0 V
+    rfm_transfer(0xC200);
+
+     // From RFM01 command #11 A618 (3. frequency setting command)
+     // Fc = 433.9MHz
+    rfm_transfer(0xA618);
+
+    // From RFM01 command #12 CE89 (11. output and FIFO mode) (gangliontwitch has CE88)
+    // f3 f2 f1 f0 s1 s0 ff fe
+    //  1  0  0  0  1  0  0  1
+    // f: FIFO interrupt level = 8
+    // s: FIFO fill start condition = reserved
+    // ff=0: disable FIFO fill
+    // fe=1: enable FIFO function
+   rfm_transfer(0xCE88);
+
+    // From RFM01 command #14 CE8B (11. output and FIFO mode)
+    // f3 f2 f1 f0 s1 s0 ff fe
+    //  1  0  0  0  1  0  1  1
+    // f: FIFO interrupt level = 8
+    // s: FIFO fill start condition = reserved
+    // ff=1: enable FIFO fill
+    // fe=1: enable FIFO function
+   rfm_transfer(0xCE8B);
+
+    // Reset Mode Command is not set so it defaults to DA00
+    // (do not disable highly sensitive reset)
+   rfm_transfer(0xDA01); // try disabling because of weird behaviour
+
+    Serial.println("attaching interrupt");
+    attachInterrupt(0, rfm01_interrupt, LOW);
+
+    Serial.println("Done init.");
+    return;
+}
+
+
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(19200);
     Serial.print("\n[rf12serial2]\n");
-    rf12_init_cc();
+    rf01_init_cc();
 }
 
 void loop() {
+	delay(5000);
+	Serial.print("*");
 
 }
 
