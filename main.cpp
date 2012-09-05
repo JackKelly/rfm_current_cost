@@ -35,7 +35,7 @@
  *     - As did the following tutorial on SPI on AVR devices:
  *       https://sites.google.com/site/qeewiki/books/avr-guide/spi
  *
- *     - If you want an indept insight into the RFM01 then read the RFM01.pdf
+ *     - If you want an indepth insight into the RFM01 then read the RFM01.pdf
  *       manual BEFORE RFM01_code.pdf as the latter has far less detail.
  *       The only advantage of the RFM01_code.pdf is that it contains a
  *       code example in C.
@@ -50,6 +50,7 @@
 
 #include <Arduino.h>
 
+// Pins
 #define RFM_IRQ      2 // PD2
 #define SS_DDR      DDRB
 #define SS_PORT     PORTB
